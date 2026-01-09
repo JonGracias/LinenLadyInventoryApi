@@ -11,5 +11,13 @@ public sealed class InventoryItemDto
     public int QuantityOnHand { get; set; }
     public int UnitPriceCents { get; set; }
 
+    public Guid PublicId { get; set; }
+    public bool IsActive { get; set; }
+    public bool IsDraft { get; set; }
+    public bool IsDeleted { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+
+
     public List<InventoryImageDto> Images { get; } = new();
 }
