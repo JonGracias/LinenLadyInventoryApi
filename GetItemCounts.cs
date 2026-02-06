@@ -1,4 +1,3 @@
-// DeleteItem.cs
 using System.Net;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
@@ -7,29 +6,22 @@ using Microsoft.Extensions.Logging;
 
 namespace LinenLady.Inventory.Functions;
 
-public sealed class DeleteItem
+public sealed class GetItemCounts
 {
     private readonly ILogger _logger;
 
-    public DeleteItem(ILoggerFactory loggerFactory)
+    public GetItemCounts(ILoggerFactory loggerFactory)
     {
-        _logger = loggerFactory.CreateLogger<DeleteItem>();
+        _logger = loggerFactory.CreateLogger<GetItemCounts>();
     }
 
-    [Function("DeleteItem")]
+    [Function("GetItemCounts")]
     public async Task<HttpResponseData> Run(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "delete", Route = "items/{id:int}")] HttpRequestData req,
-        int id,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "items/counts")] HttpRequestData req,
         CancellationToken cancellationToken)
     {
-        if (id <= 0)
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteStringAsync("Invalid id.", cancellationToken);
-            return bad;
-        }
-
         var connStr = Environment.GetEnvironmentVariable("SQL_CONNECTION_STRING");
+
         if (string.IsNullOrWhiteSpace(connStr))
         {
             _logger.LogError("Missing environment variable: SQL_CONNECTION_STRING");
@@ -38,15 +30,14 @@ public sealed class DeleteItem
             return bad;
         }
 
-        // Soft delete: requires an IsDeleted bit column (or similar).
-        // If you don't have it yet, add it and default it to 0.
         const string sql = @"
-UPDATE inv.Inventory
-SET IsDeleted = 1
-WHERE InventoryId = @InventoryId AND IsDeleted = 0;
-
-SELECT @@ROWCOUNT;
-";
+        SELECT
+        allCount =
+            (SELECT COUNT_BIG(1) FROM inv.Inventory WHERE IsDeleted = 0),
+        draftsCount =
+            (SELECT COUNT_BIG(1) FROM inv.Inventory WHERE IsDeleted = 0 AND IsDraft = 1),
+        publishedCount =
+            (SELECT COUNT_BIG(1) FROM inv.Inventory WHERE IsDeleted = 0 AND IsDraft = 0 AND IsActive = 1);";
 
         try
         {
@@ -54,29 +45,39 @@ SELECT @@ROWCOUNT;
             await conn.OpenAsync(cancellationToken);
 
             using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 30 };
-            cmd.Parameters.Add(new SqlParameter("@InventoryId", System.Data.SqlDbType.Int) { Value = id });
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
-            var rows = Convert.ToInt32(await cmd.ExecuteScalarAsync(cancellationToken));
+            long all = 0, drafts = 0, published = 0;
 
-            if (rows == 0)
+            if (await reader.ReadAsync(cancellationToken))
             {
-                var notFound = req.CreateResponse(HttpStatusCode.NotFound);
-                await notFound.WriteStringAsync("Item not found.", cancellationToken);
-                return notFound;
+                all = reader.IsDBNull(0) ? 0L : Convert.ToInt64(reader.GetValue(0));
+                drafts = reader.IsDBNull(1) ? 0L : Convert.ToInt64(reader.GetValue(1));
+                published = reader.IsDBNull(2) ? 0L : Convert.ToInt64(reader.GetValue(2));
+
             }
 
-            return req.CreateResponse(HttpStatusCode.NoContent);
+            var payload = new
+            {
+                all,
+                drafts,
+                published
+            };
+
+            var ok = req.CreateResponse(HttpStatusCode.OK);
+            await ok.WriteAsJsonAsync(payload, cancellationToken);
+            return ok;
         }
         catch (SqlException ex)
         {
-            _logger.LogError(ex, "SQL error in DeleteItem.");
+            _logger.LogError(ex, "SQL error in GetItemCounts.");
             var err = req.CreateResponse(HttpStatusCode.InternalServerError);
             await err.WriteStringAsync("Database error.", cancellationToken);
             return err;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unhandled error in DeleteItem.");
+            _logger.LogError(ex, "Unhandled error in GetItemCounts.");
             var err = req.CreateResponse(HttpStatusCode.InternalServerError);
             await err.WriteStringAsync("Server error.", cancellationToken);
             return err;

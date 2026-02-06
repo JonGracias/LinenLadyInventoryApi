@@ -1,0 +1,22 @@
+using System.Text.Json.Serialization;
+using LinenLady.Inventory.Functions.Contracts;
+
+namespace LinenLady.Inventory.Contracts;
+
+public static class AddImagesContracts
+{
+    public sealed record NewImageRequest(
+        string ImagePath,
+        bool? IsPrimary,
+        int? SortOrder
+    );
+
+    public sealed record AddImagesRequest(
+        List<NewImageRequest> Images
+    );
+
+    public sealed record AddImagesResult(
+        int InventoryId,
+        List<InventoryImageDto> Images
+    );
+}

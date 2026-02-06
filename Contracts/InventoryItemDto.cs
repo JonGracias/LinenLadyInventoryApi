@@ -1,5 +1,5 @@
-// Models/InventoryItemDto.cs
-namespace LinenLady.Inventory.Functions.Models;
+// Contracts/InventoryItemDto.cs
+namespace LinenLady.Inventory.Functions.Contracts;
 
 public sealed class InventoryItemDto
 {
@@ -17,7 +17,7 @@ public sealed class InventoryItemDto
     public bool IsDeleted { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
-
+    
 
     public List<InventoryImageDto> Images { get; } = new();
 }

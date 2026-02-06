@@ -21,8 +21,8 @@ public sealed class AiSearchVectors
 
     private sealed class RefreshVectorRequest
     {
-        public string? Purpose { get; set; } = "item_text";
-        public bool Force { get; set; } = false;
+        public string? purpose { get; set; } = "item_text";
+        public bool force { get; set; } = false;
     }
 
     [Function("AiSearchVectors")]
@@ -63,7 +63,7 @@ public sealed class AiSearchVectors
         try { body = await req.ReadFromJsonAsync<RefreshVectorRequest>(ct) ?? new RefreshVectorRequest(); }
         catch { body = new RefreshVectorRequest(); }
 
-        var purpose = string.IsNullOrWhiteSpace(body.Purpose) ? "item_text" : body.Purpose.Trim();
+        var purpose = string.IsNullOrWhiteSpace(body.purpose) ? "item_text" : body.purpose.Trim();
         if (purpose.Length > 50)
         {
             var bad = req.CreateResponse(HttpStatusCode.BadRequest);
@@ -94,7 +94,7 @@ public sealed class AiSearchVectors
 
         // 3) Check existing vector
         var existing = await LoadExistingVector(sqlConnStr, id, purpose, embDeployment!, ct);
-        if (!body.Force && existing is not null && ByteArrayEqual(existing.Value.ContentHash, hash))
+        if (!body.force && existing is not null && ByteArrayEqual(existing.Value.ContentHash, hash))
         {
             var okNoChange = req.CreateResponse(HttpStatusCode.OK);
             await okNoChange.WriteAsJsonAsync(new

@@ -2,7 +2,7 @@ using Azure.Storage;
 using Azure.Storage.Blobs;
 using Azure.Storage.Sas;
 
-namespace LinenLady.Inventory.Functions.Services;
+namespace LinenLady.Inventory.Functions.Infrastructure.Blob;
 
 public static class BlobSas
 {

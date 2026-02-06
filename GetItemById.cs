@@ -4,7 +4,7 @@ using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
-using LinenLady.Inventory.Functions.Models;
+using LinenLady.Inventory.Functions.Contracts;
 
 namespace LinenLady.Inventory.Functions;
 

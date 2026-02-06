@@ -1,5 +1,5 @@
-// Models/InventoryImageDto.cs
-namespace LinenLady.Inventory.Functions.Models;
+// Contracts/InventoryImageDto.cs
+namespace LinenLady.Inventory.Functions.Contracts;
 
 public sealed class InventoryImageDto
 {
@@ -7,6 +7,7 @@ public sealed class InventoryImageDto
     public string ImagePath { get; set; } = "";
     public bool IsPrimary { get; set; }
     public int SortOrder { get; set; }
+    public string? ReadUrl { get; set; }
 }
 public sealed class ReadUrlsRequest
 {

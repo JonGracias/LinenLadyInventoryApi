@@ -8,7 +8,7 @@ using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
-using LinenLady.Inventory.Functions.Models;
+using LinenLady.Inventory.Functions.Contracts;
 
 namespace LinenLady.Inventory.Functions;
 
@@ -35,7 +35,16 @@ public sealed class AiPrefillItem
     private sealed class AiPrefillRequest
     {
         public bool Overwrite { get; set; } = false;
+
+        // Existing behavior: cap images used for vision
         public int MaxImages { get; set; } = 4;
+
+        // NEW: optional explicit selection of which InventoryImage.ImageId values to analyze
+        public int[]? ImageIds { get; set; }
+
+        // Optional extra context for the model
+        public string? TitleHint { get; set; }
+        public string? Notes { get; set; }
     }
 
     private sealed class AiPrefillResult
@@ -139,13 +148,23 @@ public sealed class AiPrefillItem
                 return bad;
             }
 
-            // 2) Build READ SAS URLs for images
+            // 2) Determine which images to use:
+            //    - If imageIds provided: use those images (caller order, dedupe), respecting MaxImages
+            //    - Else: first N by SortOrder (existing behavior)
+            var selectedImages = SelectImages(item, body.ImageIds, body.MaxImages);
+
+            if (selectedImages.Count == 0)
+            {
+                var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+                await bad.WriteStringAsync("No valid images selected for analysis.", cancellationToken);
+                return bad;
+            }
+
+            // 3) Build READ SAS URLs for images
             var blobService = new BlobServiceClient(blobConnStr);
             var container = blobService.GetBlobContainerClient(containerName);
 
-            var imageSasUrls = item.Images
-                .OrderBy(i => i.SortOrder)
-                .Take(body.MaxImages)
+            var imageSasUrls = selectedImages
                 .Select(img => ToBlobName(img.ImagePath, containerName, publicId.Value))
                 .Where(blobName => !string.IsNullOrWhiteSpace(blobName))
                 .Select(blobName => MakeReadSas(container, blobName!, TimeSpan.FromMinutes(15)))
@@ -160,10 +179,10 @@ public sealed class AiPrefillItem
                 return bad;
             }
 
-            // 3) Call Azure OpenAI vision to get name/description/price
-            var ai = await CallAzureOpenAi(imageSasUrls, cancellationToken);
+            // 4) Call Azure OpenAI vision to get name/description/price
+            var ai = await CallAzureOpenAi(imageSasUrls, body.TitleHint, body.Notes, cancellationToken);
 
-            // 4) Decide what to overwrite (selected fields only)
+            // 5) Decide what to overwrite (selected fields only)
             var overwrite = body.Overwrite;
 
             var newName = item.Name;
@@ -205,10 +224,10 @@ public sealed class AiPrefillItem
                 return okNoChange;
             }
 
-            // 5) Update DB (only touched columns)
+            // 6) Update DB (only touched columns)
             await UpdateItemPartial(sqlConnStr, id, mode, newName, newDesc, newPrice, cancellationToken);
 
-            // 6) Re-load and return updated item
+            // 7) Re-load and return updated item
             var updated = await LoadItem(sqlConnStr, id, cancellationToken);
 
             var ok = req.CreateResponse(HttpStatusCode.OK);
@@ -229,6 +248,40 @@ public sealed class AiPrefillItem
             await err.WriteStringAsync("Server error.", cancellationToken);
             return err;
         }
+    }
+
+    private static List<InventoryImageDto> SelectImages(
+        InventoryItemDto item,
+        int[]? imageIds,
+        int maxImages)
+    {
+        // Explicit selection path
+        if (imageIds is { Length: > 0 })
+        {
+            // Only allow ids that belong to this item (item.Images is already scoped by InventoryId)
+            var byId = item.Images.ToDictionary(i => i.ImageId, i => i);
+
+            var picked = new List<InventoryImageDto>(capacity: Math.Min(maxImages, imageIds.Length));
+            var seen = new HashSet<int>();
+
+            foreach (var id in imageIds)
+            {
+                if (picked.Count >= maxImages) break;
+                if (!seen.Add(id)) continue;
+                if (byId.TryGetValue(id, out var img))
+                    picked.Add(img);
+            }
+
+            // If user passed ids but none matched, fall through to fallback behavior
+            if (picked.Count > 0)
+                return picked;
+        }
+
+        // Fallback path: first N by SortOrder (existing behavior)
+        return item.Images
+            .OrderBy(i => i.SortOrder)
+            .Take(maxImages)
+            .ToList();
     }
 
     private static async Task<Guid?> LoadPublicId(string sqlConnStr, int id, CancellationToken ct)
@@ -472,7 +525,11 @@ WHERE InventoryId = @Id;
         return current;
     }
 
-    private static async Task<AiPrefillResult> CallAzureOpenAi(IReadOnlyList<Uri> imageUrls, CancellationToken ct)
+    private static async Task<AiPrefillResult> CallAzureOpenAi(
+        IReadOnlyList<Uri> imageUrls,
+        string? titleHint,
+        string? notes,
+        CancellationToken ct)
     {
         var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")?.TrimEnd('/');
         var apiKey = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY");
@@ -484,25 +541,42 @@ WHERE InventoryId = @Id;
 
         var url = $"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={apiVersion}";
 
+        // Base instruction text
+        var sb = new StringBuilder();
+        sb.AppendLine("Analyze the item photos and return ONLY valid JSON (no markdown).");
+        sb.AppendLine("Schema:");
+        sb.AppendLine("{");
+        sb.AppendLine(@"  ""name"": string,");
+        sb.AppendLine(@"  ""description"": string,");
+        sb.AppendLine(@"  ""unitPriceCents"": number");
+        sb.AppendLine("}");
+        sb.AppendLine("Rules:");
+        sb.AppendLine("- name: short, product-style (no quotes)");
+        sb.AppendLine("- description: 1-2 sentences, factual, avoid hype");
+        sb.AppendLine("- unitPriceCents: integer cents (USD), reasonable resale price");
+
+        // Optional context
+        if (!string.IsNullOrWhiteSpace(titleHint))
+        {
+            sb.AppendLine();
+            sb.AppendLine("Title hint (optional; may be wrong):");
+            sb.AppendLine(titleHint.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(notes))
+        {
+            sb.AppendLine();
+            sb.AppendLine("Notes (optional; may be partial):");
+            sb.AppendLine(notes.Trim());
+        }
+
         // Build "content": [ {type:text}, {type:image_url}, ... ]
         var content = new List<object>
         {
             new
             {
                 type = "text",
-                text =
-@"Analyze the item photos and return ONLY valid JSON (no markdown).
-Schema:
-{
-  ""name"": string,
-  ""description"": string,
-  ""unitPriceCents"": number
-}
-Rules:
-- name: short, product-style (no quotes)
-- description: 1-2 sentences, factual, avoid hype
-- unitPriceCents: integer cents (USD), reasonable resale price
-"
+                text = sb.ToString()
             }
         };
 
@@ -520,6 +594,7 @@ Rules:
         };
 
         var json = JsonSerializer.Serialize(payload);
+
         using var httpReq = new HttpRequestMessage(HttpMethod.Post, url);
         httpReq.Headers.Add("api-key", apiKey);
         httpReq.Content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -530,7 +605,6 @@ Rules:
         if (!resp.IsSuccessStatusCode)
             throw new InvalidOperationException($"Azure OpenAI error {(int)resp.StatusCode}: {respBody}");
 
-        // Extract choices[0].message.content
         using var doc = JsonDocument.Parse(respBody);
         var contentText = doc.RootElement
             .GetProperty("choices")[0]
@@ -545,6 +619,7 @@ Rules:
             PropertyNameCaseInsensitive = true
         }) ?? new AiPrefillResult();
     }
+
 
     private static string ExtractFirstJsonObject(string s)
     {
