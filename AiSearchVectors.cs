@@ -81,7 +81,7 @@ public sealed class AiSearchVectors
         }
 
         // Build the embedding input string (stable formatting)
-        var inputText = BuildEmbeddingText(item.Value.Name, item.Value.Description);
+        var inputText = BuildEmbeddingText(item.Value.Name, item.Value.Description, item.Value.KeywordsJson);
         if (string.IsNullOrWhiteSpace(inputText))
         {
             var bad = req.CreateResponse(HttpStatusCode.BadRequest);
@@ -130,15 +130,57 @@ public sealed class AiSearchVectors
         return ok;
     }
 
-    private static string BuildEmbeddingText(string name, string? description)
+    private static string BuildEmbeddingText(string name, string? description, string? keywordsJson)
     {
         name = (name ?? "").Trim();
         var desc = (description ?? "").Trim();
 
-        if (string.IsNullOrWhiteSpace(desc))
-            return name;
+        var sb = new System.Text.StringBuilder();
+        sb.Append(name);
 
-        return $"{name}\n\n{desc}";
+        if (!string.IsNullOrWhiteSpace(desc))
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append(desc);
+        }
+
+        // Flatten keywords JSON into a readable string for the embedding
+        if (!string.IsNullOrWhiteSpace(keywordsJson))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(keywordsJson);
+                var keywords = new List<string>();
+
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        foreach (var item in prop.Value.EnumerateArray())
+                        {
+                            if (item.ValueKind == System.Text.Json.JsonValueKind.String)
+                            {
+                                var val = item.GetString();
+                                if (!string.IsNullOrWhiteSpace(val))
+                                    keywords.Add(val);
+                            }
+                        }
+                    }
+                }
+
+                if (keywords.Count > 0)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine();
+                    sb.Append("Keywords: ");
+                    sb.Append(string.Join(", ", keywords));
+                }
+            }
+            catch { /* malformed JSON — skip keywords */ }
+        }
+
+        return sb.ToString().Trim();
     }
 
     private static byte[] Sha256Bytes(string s)
@@ -155,13 +197,16 @@ public sealed class AiSearchVectors
         return true;
     }
 
-    private static async Task<(string Name, string? Description)?> LoadItemText(string connStr, int id, CancellationToken ct)
+    private static async Task<(string Name, string? Description, string? KeywordsJson)?> LoadItemText(
+    string connStr, int id, CancellationToken ct)
     {
-        const string sql = @"
-SELECT Name, Description
-FROM inv.Inventory
-WHERE InventoryId = @Id AND IsDeleted = 0;
-";
+        const string sql = """
+            SELECT i.Name, i.Description, m.KeywordsJson
+            FROM inv.Inventory i
+            LEFT JOIN inv.InventoryAiMeta m ON m.InventoryId = i.InventoryId
+            WHERE i.InventoryId = @Id AND i.IsDeleted = 0;
+            """;
+
         using var conn = new SqlConnection(connStr);
         await conn.OpenAsync(ct);
 
@@ -171,9 +216,11 @@ WHERE InventoryId = @Id AND IsDeleted = 0;
         using var r = await cmd.ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) return null;
 
-        var name = r.GetString(0);
-        var desc = r.IsDBNull(1) ? null : r.GetString(1);
-        return (name, desc);
+        return (
+            r.GetString(0),
+            r.IsDBNull(1) ? null : r.GetString(1),
+            r.IsDBNull(2) ? null : r.GetString(2)
+        );
     }
 
     private static async Task<(int VectorId, int Dimensions, byte[] ContentHash)?> LoadExistingVector(

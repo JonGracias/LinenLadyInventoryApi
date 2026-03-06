@@ -1,44 +1,32 @@
-// /Functions/AddImages.cs
+// /Functions/SetPrimaryImage.cs
 using System.Net;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using LinenLady.Inventory.Application.Images;
-using static LinenLady.Inventory.Contracts.AddImagesContracts;
 
 namespace LinenLady.Inventory.Functions;
 
-public sealed class AddImages
+public sealed class SetPrimaryImage
 {
-    private readonly AddImagesHandler _handler;
+    private readonly SetPrimaryImageHandler _handler;
 
-    public AddImages(AddImagesHandler handler)
+    public SetPrimaryImage(SetPrimaryImageHandler handler)
     {
         _handler = handler;
     }
 
-    [Function("AddImages")]
+    [Function("SetPrimaryImage")]
     public async Task<HttpResponseData> Run(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "items/{id:int}/images")] HttpRequestData req,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "patch", Route = "items/{id:int}/images/{imageId:int}/primary")] HttpRequestData req,
         int id,
+        int imageId,
         CancellationToken ct)
     {
-        AddImagesRequest? body;
-        try { body = await req.ReadFromJsonAsync<AddImagesRequest>(ct); }
-        catch { body = null; }
-
-        if (body is null)
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteStringAsync("Invalid JSON body.", ct);
-            return bad;
-        }
-
         try
         {
-            var result = await _handler.HandleAsync(id, body, ct);
+            await _handler.HandleAsync(id, imageId, ct);
 
-            var resp = req.CreateResponse(HttpStatusCode.Created);
-            await resp.WriteAsJsonAsync(result, ct);
+            var resp = req.CreateResponse(HttpStatusCode.NoContent);
             return resp;
         }
         catch (ArgumentException ex)

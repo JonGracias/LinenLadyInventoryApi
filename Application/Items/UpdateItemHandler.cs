@@ -1,152 +1,131 @@
-using System.Text.Json;
-using Microsoft.Data.SqlClient;
-using Microsoft.Extensions.Logging;
+// Application/Items/UpdateItemHandler.cs
 using LinenLady.Inventory.Functions.Contracts;
+using LinenLady.Inventory.Functions.Infrastructure.Sql;
 
 namespace LinenLady.Inventory.Application.Items;
 
 public sealed class UpdateItemHandler
 {
-    private readonly ILogger<UpdateItemHandler> _logger;
+    private readonly IInventoryRepository _repo;
+    private readonly IInventoryImageRepository _imageRepo;
+    private readonly IAiRewriteService _aiService;
 
-    public UpdateItemHandler(ILogger<UpdateItemHandler> logger)
+    public UpdateItemHandler(
+        IInventoryRepository repo,
+        IInventoryImageRepository imageRepo,
+        IAiRewriteService aiService)
     {
-        _logger = logger;
+        _repo      = repo;
+        _imageRepo = imageRepo;
+        _aiService = aiService;
     }
 
-    public async Task<InventoryItemDto> HandleAsync(int id, JsonElement root, CancellationToken ct)
+    public async Task<(UpdateItemResult Result, UpdateItemResponse? Response)> Handle(
+        int inventoryId,
+        UpdateItemRequest request,
+        CancellationToken ct)
     {
-        if (id <= 0) throw new ArgumentException("Invalid id.");
+        // 1. Load current state — single query covers both existence check and field values
+        var current = await _repo.GetById(inventoryId, ct);
+        if (current is null)
+            return (UpdateItemResult.NotFound, null);
 
-        var connStr = Environment.GetEnvironmentVariable("SQL_CONNECTION_STRING");
-        if (string.IsNullOrWhiteSpace(connStr))
-            throw new InvalidOperationException("Server misconfigured: missing SQL_CONNECTION_STRING.");
+        // 2. Resolve updated field values (null = keep current)
+        var name       = request.Name        ?? current.Name;
+        var description = request.Description ?? current.Description;
+        var priceCents  = request.UnitPriceCents ?? current.UnitPriceCents;
+        var quantity    = request.QuantityOnHand ?? current.QuantityOnHand;
+        var isActive    = request.IsActive    ?? current.IsActive;
+        var isFeatured  = request.IsFeatured  ?? current.IsFeatured;
 
-        if (root.ValueKind != JsonValueKind.Object)
-            throw new ArgumentException("Body must be a JSON object.");
+        // Publishing clears the draft flag
+        var isDraft = current.IsDraft;
+        if (request.IsActive == true)
+            isDraft = false;
 
-        // Optional fields: update only what is present. :contentReference[oaicite:4]{index=4}
-        bool hasSku = TryGetString(root, "sku", out var sku, allowNull: false);
-        bool hasName = TryGetString(root, "name", out var name, allowNull: false);
-
-        // Description can be explicitly set to null to clear it. :contentReference[oaicite:5]{index=5}
-        bool hasDescription = TryGetString(root, "description", out var description, allowNull: true);
-
-        bool hasQoh = TryGetInt(root, "quantityOnHand", out var quantityOnHand);
-        bool hasPrice = TryGetInt(root, "unitPriceCents", out var unitPriceCents);
-
-        if (!(hasSku || hasName || hasDescription || hasQoh || hasPrice))
-            throw new ArgumentException("No updatable fields provided.");
-
-        // Validation (same rules as current) :contentReference[oaicite:6]{index=6}
-        if (hasSku)
+        // 3. Publish gate — only runs when the request is explicitly activating the item
+        //    and the item is not already active (i.e. this is a publish action, not a field edit).
+        if (request.IsActive == true && !current.IsActive)
         {
-            sku = sku!.Trim();
-            if (sku.Length == 0 || sku.Length > 64)
-                throw new ArgumentException("sku must be 1..64 characters.");
+            // Name must be set and not the default placeholder
+            if (string.IsNullOrWhiteSpace(name) || name.Equals("Draft", StringComparison.OrdinalIgnoreCase))
+                return (UpdateItemResult.BadRequest, null);
+
+            // Price must be set
+            if (priceCents <= 0)
+                return (UpdateItemResult.BadRequest, null);
+
+            // Must have at least one image
+            var imageCount = await _imageRepo.GetImageCount(inventoryId, ct);
+            if (imageCount == 0)
+                return (UpdateItemResult.BadRequest, null);
         }
 
-        if (hasName)
+        // 4. AI rewrite (if requested)
+        if (request.Ai is not null && request.Ai.Fields.Count > 0)
         {
-            name = name!.Trim();
-            if (name.Length == 0 || name.Length > 255)
-                throw new ArgumentException("name must be 1..255 characters.");
-        }
-
-        if (hasDescription && description is not null && description.Length > 4000)
-            throw new ArgumentException("description too long (max 4000 characters).");
-
-        if (hasQoh && quantityOnHand < 0)
-            throw new ArgumentException("quantityOnHand must be >= 0.");
-
-        if (hasPrice && unitPriceCents < 0)
-            throw new ArgumentException("unitPriceCents must be >= 0.");
-
-        const string updateSql = @"
-UPDATE inv.Inventory
-SET
-    Sku = COALESCE(@Sku, Sku),
-    Name = COALESCE(@Name, Name),
-    Description = CASE WHEN @DescriptionIsSet = 1 THEN @Description ELSE Description END,
-    QuantityOnHand = COALESCE(@QuantityOnHand, QuantityOnHand),
-    UnitPriceCents = COALESCE(@UnitPriceCents, UnitPriceCents),
-    UpdatedAt = SYSUTCDATETIME()
-WHERE InventoryId = @Id AND IsDeleted = 0;
-
-SELECT
-    InventoryId, PublicId, Sku, Name, Description, QuantityOnHand, UnitPriceCents,
-    IsActive, IsDraft, IsDeleted, CreatedAt, UpdatedAt
-FROM inv.Inventory
-WHERE InventoryId = @Id AND IsDeleted = 0;
-";
-
-        try
-        {
-            using var conn = new SqlConnection(connStr);
-            await conn.OpenAsync(ct);
-
-            using var cmd = new SqlCommand(updateSql, conn) { CommandTimeout = 30 };
-            cmd.Parameters.AddWithValue("@Id", id);
-
-            cmd.Parameters.AddWithValue("@Sku", (object?)(hasSku ? sku : null) ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Name", (object?)(hasName ? name : null) ?? DBNull.Value);
-
-            cmd.Parameters.AddWithValue("@DescriptionIsSet", hasDescription ? 1 : 0);
-            cmd.Parameters.AddWithValue("@Description", hasDescription ? (object?)description ?? DBNull.Value : DBNull.Value);
-
-            cmd.Parameters.AddWithValue("@QuantityOnHand", hasQoh ? quantityOnHand : (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("@UnitPriceCents", hasPrice ? unitPriceCents : (object)DBNull.Value);
-
-            using var reader = await cmd.ExecuteReaderAsync(ct);
-
-            if (!await reader.ReadAsync(ct))
-                throw new KeyNotFoundException("Item not found.");
-
-            return new InventoryItemDto
+            var aiResult = await _aiService.Rewrite(new AiRewriteInput
             {
-                InventoryId = reader.GetInt32(0),
-                PublicId = reader.GetGuid(1),
-                Sku = reader.GetString(2),
-                Name = reader.GetString(3),
-                Description = reader.IsDBNull(4) ? null : reader.GetString(4),
-                QuantityOnHand = reader.GetInt32(5),
-                UnitPriceCents = reader.GetInt32(6),
-                IsActive = reader.GetBoolean(7),
-                IsDraft = reader.GetBoolean(8),
-                IsDeleted = reader.GetBoolean(9),
-                CreatedAt = reader.GetDateTime(10),
-                UpdatedAt = reader.GetDateTime(11)
-            };
+                CurrentName        = name,
+                CurrentDescription = description ?? "",
+                CurrentPriceCents  = priceCents,
+                Hint               = request.Ai.Hint ?? "",
+                Fields             = request.Ai.Fields
+            }, ct);
+
+            if (aiResult is not null)
+            {
+                if (request.Ai.Fields.Contains("name") && aiResult.Name is not null)
+                    name = aiResult.Name;
+
+                if (request.Ai.Fields.Contains("description") && aiResult.Description is not null)
+                    description = aiResult.Description;
+
+                if (request.Ai.Fields.Contains("price") && aiResult.PriceCents is not null)
+                    priceCents = aiResult.PriceCents.Value;
+            }
         }
-        catch (SqlException ex)
+
+        // 5. Persist
+        var updated = await _repo.Update(inventoryId, new UpdateItemFields
         {
-            _logger.LogError(ex, "SQL error in UpdateItemHandler.");
-            throw new InvalidOperationException("Database error.");
-        }
-    }
+            Name           = name,
+            Description    = description,
+            UnitPriceCents = priceCents,
+            QuantityOnHand = quantity,
+            IsActive       = isActive,
+            IsDraft        = isDraft,
+            IsFeatured     = isFeatured,
+        }, ct);
 
-    private static bool TryGetString(JsonElement obj, string prop, out string? value, bool allowNull)
-    {
-        value = null;
-        if (!obj.TryGetProperty(prop, out var el)) return false;
+        if (!updated)
+            return (UpdateItemResult.Failed, null);
 
-        if (el.ValueKind == JsonValueKind.Null)
+        // 6. Update primary image if requested (non-fatal)
+        if (request.PrimaryImageId.HasValue)
         {
-            if (!allowNull) return false;
-            value = null;
-            return true;
+            try
+            {
+                await _imageRepo.SetPrimaryImage(inventoryId, request.PrimaryImageId.Value, ct);
+            }
+            catch
+            {
+                // Non-fatal — the rest of the update succeeded
+            }
         }
 
-        if (el.ValueKind != JsonValueKind.String) return false;
-        value = el.GetString();
-        return true;
-    }
-
-    private static bool TryGetInt(JsonElement obj, string prop, out int value)
-    {
-        value = default;
-        if (!obj.TryGetProperty(prop, out var el)) return false;
-        if (el.ValueKind != JsonValueKind.Number) return false;
-        return el.TryGetInt32(out value);
+        // 7. Return updated state
+        return (UpdateItemResult.Updated, new UpdateItemResponse
+        {
+            InventoryId    = inventoryId,
+            Name           = name,
+            Description    = description,
+            UnitPriceCents = priceCents,
+            QuantityOnHand = quantity,
+            IsActive       = isActive,
+            IsDraft        = isDraft,
+            IsFeatured     = isFeatured,
+            UpdatedAt      = DateTime.UtcNow
+        });
     }
 }

@@ -1,16 +1,46 @@
-using System.Text.Json.Serialization;
+// Contracts/UpdateItemContracts.cs
+namespace LinenLady.Inventory.Functions.Contracts;
 
-namespace LinenLady.Inventory.Contracts;
-
-public static class UpdateItemContracts
+public sealed class UpdateItemRequest
 {
-    // If a property is omitted => no change.
-    // If description is present and null => clear it.
-    public sealed record UpdateItemRequest(
-        string? Sku,
-        string? Name,
-        string? Description,
-        int? QuantityOnHand,
-        int? UnitPriceCents
-    );
+    // Direct field updates — null means "don't change"
+    public string? Name { get; set; }
+    public string? Description { get; set; }
+    public int? UnitPriceCents { get; set; }
+    public int? QuantityOnHand { get; set; }
+    public int? PrimaryImageId { get; set; }
+
+    // State flags
+    public bool? IsActive { get; set; }
+    public bool? IsFeatured { get; set; }
+
+    // AI rewrite
+    public AiRewriteRequest? Ai { get; set; }
+}
+
+public sealed class AiRewriteRequest
+{
+    public string? Hint { get; set; }
+    public List<string> Fields { get; set; } = new(); // "name", "description", "price"
+}
+
+public sealed class UpdateItemResponse
+{
+    public int InventoryId { get; set; }
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public int UnitPriceCents { get; set; }
+    public int QuantityOnHand { get; set; }
+    public bool IsActive { get; set; }
+    public bool IsDraft { get; set; }
+    public bool IsFeatured { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+public enum UpdateItemResult
+{
+    Updated,
+    NotFound,
+    BadRequest,
+    Failed
 }

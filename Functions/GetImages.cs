@@ -1,3 +1,4 @@
+// /Functions/GetImages.cs
 using System.Net;
 using LinenLady.Inventory.Application.Images;
 using Microsoft.Azure.Functions.Worker;

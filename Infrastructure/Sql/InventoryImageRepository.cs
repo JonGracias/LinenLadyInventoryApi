@@ -1,3 +1,4 @@
+// Infrastructure/Sql/InventoryImageRepository.cs
 using Microsoft.Data.SqlClient;
 
 namespace LinenLady.Inventory.Functions.Infrastructure.Sql;
@@ -14,10 +15,10 @@ public sealed class InventoryImageRepository : IInventoryImageRepository
     public async Task<bool> ItemExists(int inventoryId, CancellationToken ct)
     {
         const string sql = """
-        SELECT COUNT(1)
-        FROM inv.Inventory
-        WHERE InventoryId = @InventoryId AND IsDeleted = 0;
-        """;
+            SELECT COUNT(1)
+            FROM inv.Inventory
+            WHERE InventoryId = @InventoryId AND IsDeleted = 0;
+            """;
 
         using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
@@ -28,13 +29,30 @@ public sealed class InventoryImageRepository : IInventoryImageRepository
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct)) > 0;
     }
 
+    public async Task<int> GetImageCount(int inventoryId, CancellationToken ct)
+    {
+        const string sql = """
+            SELECT COUNT(1)
+            FROM inv.InventoryImage
+            WHERE InventoryId = @InventoryId;
+            """;
+
+        using var conn = new SqlConnection(_connStr);
+        await conn.OpenAsync(ct);
+
+        using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@InventoryId", inventoryId);
+
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
+    }
+
     public async Task<bool?> IsPrimaryImage(int inventoryId, int imageId, CancellationToken ct)
     {
         const string sql = """
-        SELECT IsPrimary
-        FROM inv.InventoryImage
-        WHERE ImageId = @ImageId AND InventoryId = @InventoryId;
-        """;
+            SELECT IsPrimary
+            FROM inv.InventoryImage
+            WHERE ImageId = @ImageId AND InventoryId = @InventoryId;
+            """;
 
         using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
@@ -44,16 +62,16 @@ public sealed class InventoryImageRepository : IInventoryImageRepository
         cmd.Parameters.AddWithValue("@ImageId", imageId);
 
         var result = await cmd.ExecuteScalarAsync(ct);
-        return result is null || result is DBNull ? null : Convert.ToBoolean(result);
+        return result is null or DBNull ? null : Convert.ToBoolean(result);
     }
 
     public async Task<bool> DeleteImage(int inventoryId, int imageId, CancellationToken ct)
     {
         const string sql = """
-        DELETE FROM inv.InventoryImage
-        WHERE ImageId = @ImageId AND InventoryId = @InventoryId;
-        SELECT @@ROWCOUNT;
-        """;
+            DELETE FROM inv.InventoryImage
+            WHERE ImageId = @ImageId AND InventoryId = @InventoryId;
+            SELECT @@ROWCOUNT;
+            """;
 
         using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
@@ -68,11 +86,11 @@ public sealed class InventoryImageRepository : IInventoryImageRepository
     public async Task<int?> PickNewPrimaryImage(int inventoryId, CancellationToken ct)
     {
         const string sql = """
-        SELECT TOP 1 ImageId
-        FROM inv.InventoryImage
-        WHERE InventoryId = @InventoryId
-        ORDER BY SortOrder, ImageId;
-        """;
+            SELECT TOP 1 ImageId
+            FROM inv.InventoryImage
+            WHERE InventoryId = @InventoryId
+            ORDER BY SortOrder, ImageId;
+            """;
 
         using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);
@@ -81,16 +99,16 @@ public sealed class InventoryImageRepository : IInventoryImageRepository
         cmd.Parameters.AddWithValue("@InventoryId", inventoryId);
 
         var result = await cmd.ExecuteScalarAsync(ct);
-        return result is null || result is DBNull ? null : Convert.ToInt32(result);
+        return result is null or DBNull ? null : Convert.ToInt32(result);
     }
 
     public async Task SetPrimaryImage(int inventoryId, int primaryImageId, CancellationToken ct)
     {
         const string sql = """
-        UPDATE inv.InventoryImage
-        SET IsPrimary = CASE WHEN ImageId = @PrimaryImageId THEN 1 ELSE 0 END
-        WHERE InventoryId = @InventoryId;
-        """;
+            UPDATE inv.InventoryImage
+            SET IsPrimary = CASE WHEN ImageId = @PrimaryImageId THEN 1 ELSE 0 END
+            WHERE InventoryId = @InventoryId;
+            """;
 
         using var conn = new SqlConnection(_connStr);
         await conn.OpenAsync(ct);

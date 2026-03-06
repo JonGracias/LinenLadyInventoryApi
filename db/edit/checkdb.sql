@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX UX_Inventory_Sku ON inv.Inventory(Sku);

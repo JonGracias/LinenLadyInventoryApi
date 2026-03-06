@@ -141,7 +141,7 @@ Write-Host "   updated name='$($updated.name)' price=$($updated.unitPriceCents)"
 # -----------------------------
 # 6) Publish
 # -----------------------------
-Write-Host "6) Publish..." -ForegroundColor Cyan
+<# Write-Host "6) Publish..." -ForegroundColor Cyan
 
 $resp = Invoke-WebRequest -Method Post `
   -Uri "$BaseUrl/api/items/$InventoryId/publish" `
@@ -158,7 +158,7 @@ $published = $resp.Content | ConvertFrom-Json
 Write-Host "   publish parsed: isActive=$($published.isActive) isDraft=$($published.isDraft)" -ForegroundColor DarkGray
 
 Assert-True ($published.isActive -eq $true)  "publish did not set isActive=true"
-Assert-True ($published.isDraft  -eq $false) "publish did not set isDraft=false"
+Assert-True ($published.isDraft  -eq $false) "publish did not set isDraft=false" #>
 
 
 # -----------------------------

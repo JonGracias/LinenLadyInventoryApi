@@ -1,44 +1,40 @@
-// /Functions/AddImages.cs
+// /Functions/ReplaceImage.cs
 using System.Net;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using LinenLady.Inventory.Application.Images;
-using static LinenLady.Inventory.Contracts.AddImagesContracts;
+using LinenLady.Inventory.Functions.Infrastructure.Blob;
 
 namespace LinenLady.Inventory.Functions;
 
-public sealed class AddImages
+public sealed class ReplaceImage
 {
-    private readonly AddImagesHandler _handler;
+    private readonly ReplaceImageHandler _handler;
 
-    public AddImages(AddImagesHandler handler)
+    public ReplaceImage(ReplaceImageHandler handler)
     {
         _handler = handler;
     }
 
-    [Function("AddImages")]
+    [Function("ReplaceImage")]
     public async Task<HttpResponseData> Run(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "items/{id:int}/images")] HttpRequestData req,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "items/{id:int}/images/{imageId:int}/replace-url")] HttpRequestData req,
         int id,
+        int imageId,
         CancellationToken ct)
     {
-        AddImagesRequest? body;
-        try { body = await req.ReadFromJsonAsync<AddImagesRequest>(ct); }
-        catch { body = null; }
-
-        if (body is null)
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteStringAsync("Invalid JSON body.", ct);
-            return bad;
-        }
-
         try
         {
-            var result = await _handler.HandleAsync(id, body, ct);
+            var info = await _handler.HandleAsync(id, imageId, ct);
 
-            var resp = req.CreateResponse(HttpStatusCode.Created);
-            await resp.WriteAsJsonAsync(result, ct);
+            var resp = req.CreateResponse(HttpStatusCode.OK);
+            await resp.WriteAsJsonAsync(new
+            {
+                UploadUrl       = info.UploadUrl,
+                RequiredHeaders = info.RequiredHeaders,
+                ContentType     = info.ContentType,
+                BlobName        = info.BlobName,
+            }, ct);
             return resp;
         }
         catch (ArgumentException ex)

@@ -1,14 +1,21 @@
+// Functions/UpdateItem.cs
 using System.Net;
 using System.Text.Json;
+using LinenLady.Inventory.Application.Items;
+using LinenLady.Inventory.Functions.Contracts;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
-using LinenLady.Inventory.Application.Items;
 
 namespace LinenLady.Inventory.Functions;
 
 public sealed class UpdateItem
 {
     private readonly UpdateItemHandler _handler;
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public UpdateItem(UpdateItemHandler handler)
     {
@@ -17,47 +24,48 @@ public sealed class UpdateItem
 
     [Function("UpdateItem")]
     public async Task<HttpResponseData> Run(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "patch", "put", Route = "items/{id:int}")] HttpRequestData req,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "patch",
+            Route = "items/{id:int}")]
+        HttpRequestData req,
         int id,
         CancellationToken ct)
     {
-        JsonDocument? doc = null;
-        try { doc = await JsonDocument.ParseAsync(req.Body, cancellationToken: ct); }
+        if (id <= 0)
+            return req.CreateResponse(HttpStatusCode.BadRequest);
+
+        UpdateItemRequest? body;
+        try
+        {
+            var bodyStr = await req.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(bodyStr))
+                return req.CreateResponse(HttpStatusCode.BadRequest);
+
+            body = JsonSerializer.Deserialize<UpdateItemRequest>(bodyStr, JsonOptions);
+            if (body is null)
+                return req.CreateResponse(HttpStatusCode.BadRequest);
+        }
         catch
         {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteStringAsync("Invalid JSON body.", ct);
-            return bad;
+            return req.CreateResponse(HttpStatusCode.BadRequest);
         }
 
-        using (doc)
-        {
-            try
-            {
-                var dto = await _handler.HandleAsync(id, doc!.RootElement, ct);
+        var (result, response) = await _handler.Handle(id, body, ct);
 
-                var ok = req.CreateResponse(HttpStatusCode.OK);
-                await ok.WriteAsJsonAsync(dto, ct);
-                return ok;
-            }
-            catch (ArgumentException ex)
-            {
-                var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-                await bad.WriteStringAsync(ex.Message, ct);
-                return bad;
-            }
-            catch (KeyNotFoundException ex)
-            {
-                var nf = req.CreateResponse(HttpStatusCode.NotFound);
-                await nf.WriteStringAsync(ex.Message, ct);
-                return nf;
-            }
-            catch (InvalidOperationException ex)
-            {
-                var err = req.CreateResponse(HttpStatusCode.InternalServerError);
-                await err.WriteStringAsync(ex.Message, ct);
-                return err;
-            }
+        switch (result)
+        {
+            case UpdateItemResult.Updated:
+                var okResp = req.CreateResponse(HttpStatusCode.OK);
+                await okResp.WriteAsJsonAsync(response, ct);
+                return okResp;
+
+            case UpdateItemResult.NotFound:
+                return req.CreateResponse(HttpStatusCode.NotFound);
+
+            case UpdateItemResult.BadRequest:
+                return req.CreateResponse(HttpStatusCode.BadRequest);
+
+            default:
+                return req.CreateResponse(HttpStatusCode.InternalServerError);
         }
     }
 }
