@@ -27,7 +27,7 @@ public sealed class GenerateKeywordsHandler
         _seoHandler = seoHandler;
     }
 
-    public async Task<GenerateKeywordsResult> HandleAsync(int inventoryId, CancellationToken ct)
+    public async Task<GenerateKeywordsResult> HandleAsync(int inventoryId, string? hint, CancellationToken ct)
     {
         if (inventoryId <= 0) throw new ArgumentException("Invalid id.");
 
@@ -39,7 +39,7 @@ public sealed class GenerateKeywordsHandler
             ?? throw new KeyNotFoundException($"Item {inventoryId} not found.");
 
         // 2. Build prompt and call Azure OpenAI for keywords
-        var keywordsJson = await GenerateKeywordsAsync(item, ct);
+        var keywordsJson = await GenerateKeywordsAsync(item, hint, ct);
 
         // 3. Upsert keywords into inv.InventoryAiMeta
         await UpsertKeywordsAsync(connStr, inventoryId, item.AdminNotes, keywordsJson, ct);
@@ -95,7 +95,7 @@ public sealed class GenerateKeywordsHandler
 
     // ── Azure OpenAI ────────────────────────────────────────────────────────
 
-    private async Task<string> GenerateKeywordsAsync(ItemData item, CancellationToken ct)
+    private async Task<string> GenerateKeywordsAsync(ItemData item, string? hint, CancellationToken ct)
     {
         var endpoint   = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")?.TrimEnd('/');
         var apiKey     = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY");
@@ -105,7 +105,7 @@ public sealed class GenerateKeywordsHandler
         if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(deployment))
             throw new InvalidOperationException("Missing Azure OpenAI chat config (AZURE_OPENAI_CHAT_DEPLOYMENT).");
 
-        var prompt = BuildPrompt(item);
+        var prompt = BuildPrompt(item, hint);
         var url    = $"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={apiVersion}";
 
         var payload = new
@@ -145,7 +145,7 @@ public sealed class GenerateKeywordsHandler
         return content;
     }
 
-    private static string BuildPrompt(ItemData item)
+    private static string BuildPrompt(ItemData item, string? hint)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Item name: {item.Name}");
@@ -162,6 +162,13 @@ public sealed class GenerateKeywordsHandler
             sb.AppendLine();
             sb.AppendLine($"Additional seller notes (private context, not shown publicly): {item.AdminNotes}");
         }
+
+        if (!string.IsNullOrWhiteSpace(hint))
+    {
+        sb.AppendLine();
+        sb.AppendLine($"IMPORTANT instruction from seller: {hint}");
+        sb.AppendLine("You MUST follow this instruction. If it says to exclude something, exclude it from ALL keyword categories.");
+    }
 
         return sb.ToString().Trim();
     }

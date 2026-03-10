@@ -215,7 +215,7 @@ public sealed class CreateItemsHandler
         {
             try
             {
-                await _keywordsHandler.HandleAsync(inventoryId, CancellationToken.None);
+                await _keywordsHandler.HandleAsync(inventoryId, null, CancellationToken.None);
             }
             catch (Exception ex)
             {

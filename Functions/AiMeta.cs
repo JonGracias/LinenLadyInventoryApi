@@ -30,6 +30,15 @@ public sealed class GenerateKeywords
         int id,
         CancellationToken ct)
     {
+        string? hint = null;
+        try {
+            var body = await req.ReadAsStringAsync();
+            if (!string.IsNullOrWhiteSpace(body)) {
+                using var doc = JsonDocument.Parse(body);
+                hint = doc.RootElement.TryGetProperty("hint", out var h) ? h.GetString() : null;
+            }
+        } catch { /* hint stays null */ }
+
         if (id <= 0)
         {
             var bad = req.CreateResponse(HttpStatusCode.BadRequest);
@@ -39,7 +48,7 @@ public sealed class GenerateKeywords
 
         try
         {
-            var result = await _handler.HandleAsync(id, ct);
+            var result = await _handler.HandleAsync(id, hint, ct);
             var ok = req.CreateResponse(HttpStatusCode.OK);
             await ok.WriteAsJsonAsync(result, ct);
             return ok;
@@ -62,6 +71,7 @@ public sealed class GenerateKeywords
             await err.WriteStringAsync(ex.Message, ct);
             return err;
         }
+        
     }
 }
 

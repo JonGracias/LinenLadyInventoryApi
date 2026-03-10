@@ -149,7 +149,7 @@ public sealed class GenerateSeoHandler
         if (!string.IsNullOrWhiteSpace(item.Description))
         {
             sb.AppendLine();
-            sb.AppendLine($"Description: {item.Description}");
+            sb.AppendLine($"Item description (IMPORTANT — use this as the basis for metaDescription and jsonLd.description): {item.Description}");
         }
 
         if (!string.IsNullOrWhiteSpace(item.KeywordsJson))
@@ -171,14 +171,14 @@ public sealed class GenerateSeoHandler
 
         {
           "title": "string — page <title> tag, max 60 chars, include item name + 1-2 key descriptors",
-          "metaDescription": "string — meta description, 140-155 chars, compelling, includes key search terms",
+          "metaDescription": "- metaDescription: expand slightly on the item description for SEO, but it must be recognizably based on it — do not invent new details, includes key search terms",
           "ogTitle": "string — Open Graph title for social sharing, can be slightly more engaging than title",
           "ogDescription": "string — OG description for social sharing, 1-2 sentences, evocative",
           "jsonLd": {
             "@context": "https://schema.org",
             "@type": "Product",
             "name": "string",
-            "description": "string — full item description",
+            "description": "use the item description verbatim or with only minor grammatical cleanup",
             "offers": {
               "@type": "Offer",
               "priceCurrency": "USD",
