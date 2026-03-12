@@ -1,5 +1,4 @@
 using LinenLady.Inventory.Functions.Infrastructure.Sql;
-using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -46,6 +45,28 @@ var host = new HostBuilder()
         services.AddSingleton<LinenLady.Inventory.Application.Items.IAiRewriteService>(
                     _ => new LinenLady.Inventory.Application.Items.AiRewriteService(
                         aoaiEndpoint, aoaiKey, aoaiDeployment, aoaiVersion));
+
+        // Repos (Infrastructure)
+        services.AddScoped<LinenLady.Infrastructure.Sql.ICustomerRepository>(
+            _ => new LinenLady.Infrastructure.Sql.CustomerRepository(sqlConnStr));
+
+        // Square HTTP client + service
+        services.AddHttpClient("square");
+        services.AddScoped<LinenLady.Infrastructure.ISquareService,
+                        LinenLady.Infrastructure.SquareService>();
+
+        // Customer + Reservation handlers (Application)
+        services.AddScoped<LinenLady.Inventory.Application.Customers.SyncCustomerHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.GetMyProfileHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.UpdateProfileHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.UpsertAddressHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.DeleteAddressHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.SetPreferencesHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.CreateReservationHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.CancelReservationHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.SquareWebhookHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.ExpireReservationsHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Customers.MessageHandler>();
 
     })
     .Build();
