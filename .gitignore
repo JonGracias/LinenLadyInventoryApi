@@ -263,9 +263,9 @@ paket-files/
 __pycache__/
 *.pyc
 
-tests/*
-temp/*
-db/*
+tests/
+temp/
+db/
 
 # Azurite local storage
 __azurite_db_blob__.json

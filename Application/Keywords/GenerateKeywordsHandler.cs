@@ -34,21 +34,15 @@ public sealed class GenerateKeywordsHandler
         var connStr = Environment.GetEnvironmentVariable("SQL_CONNECTION_STRING")
             ?? throw new InvalidOperationException("Missing SQL_CONNECTION_STRING.");
 
-        // 1. Load item text + admin notes together
         var item = await LoadItemAsync(connStr, inventoryId, ct)
             ?? throw new KeyNotFoundException($"Item {inventoryId} not found.");
 
-        // 2. Build prompt and call Azure OpenAI for keywords
         var keywordsJson = await GenerateKeywordsAsync(item, hint, ct);
 
-        // 3. Upsert keywords into inv.InventoryAiMeta
         await UpsertKeywordsAsync(connStr, inventoryId, item.AdminNotes, keywordsJson, ct);
 
-        // 4. Trigger vector refresh so the new keywords are included in embeddings
         var vectorRefreshed = await RefreshVectorAsync(inventoryId, ct);
-
-        // 5. Generate SEO from the freshly saved keywords
-        var seoRefreshed = await RefreshSeoAsync(inventoryId, ct);
+        var seoRefreshed    = await RefreshSeoAsync(inventoryId, ct);
 
         return new GenerateKeywordsResult(inventoryId, keywordsJson, vectorRefreshed, seoRefreshed);
     }
@@ -103,7 +97,7 @@ public sealed class GenerateKeywordsHandler
         var apiVersion = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_VERSION") ?? "2024-02-15-preview";
 
         if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(deployment))
-            throw new InvalidOperationException("Missing Azure OpenAI chat config (AZURE_OPENAI_CHAT_DEPLOYMENT).");
+            throw new InvalidOperationException("Missing Azure OpenAI chat config (AZURE_OPENAI_DEPLOYMENT).");
 
         var prompt = BuildPrompt(item, hint);
         var url    = $"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={apiVersion}";
@@ -129,16 +123,32 @@ public sealed class GenerateKeywordsHandler
         var body = await resp.Content.ReadAsStringAsync(ct);
 
         if (!resp.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Azure OpenAI error {(int)resp.StatusCode}: {body}");
+        {
+            // Log the full raw error so we can diagnose content filter issues
+            _logger.LogError("OpenAI error {Status} for item — raw body: {Body}", (int)resp.StatusCode, body);
 
-        using var doc    = JsonDocument.Parse(body);
-        var content      = doc.RootElement
+            // Try to extract and log the content filter details specifically
+            try
+            {
+                using var errDoc = JsonDocument.Parse(body);
+                if (errDoc.RootElement.TryGetProperty("error", out var error) &&
+                    error.TryGetProperty("innererror", out var inner))
+                {
+                    _logger.LogError("Content filter innererror: {Inner}", inner.ToString());
+                }
+            }
+            catch { /* ignore — raw body already logged above */ }
+
+            throw new InvalidOperationException($"Azure OpenAI error {(int)resp.StatusCode}: {body}");
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        var content   = doc.RootElement
             .GetProperty("choices")[0]
             .GetProperty("message")
             .GetProperty("content")
             .GetString() ?? "{}";
 
-        // Validate it's real JSON before storing
         try { JsonDocument.Parse(content); }
         catch { content = "{}"; }
 
@@ -164,40 +174,43 @@ public sealed class GenerateKeywordsHandler
         }
 
         if (!string.IsNullOrWhiteSpace(hint))
-    {
-        sb.AppendLine();
-        sb.AppendLine($"IMPORTANT instruction from seller: {hint}");
-        sb.AppendLine("You MUST follow this instruction. If it says to exclude something, exclude it from ALL keyword categories.");
-    }
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Seller preference for keywords: {hint}");
+        }
 
         return sb.ToString().Trim();
     }
 
     private const string SystemPrompt = """
-        You are a product cataloguing assistant for an antique and vintage item marketplace.
-        
+        You are a product cataloguing assistant for an antique and vintage linen shop.
+        The shop owner sells tablecloths, napkins, runners, lace, bed linens, and similar textile items
+        at a weekend flea market. Your job is to help organize her inventory for her online shop.
+
         Given item details, extract structured keywords that will help buyers find this item through search.
         Be specific and thorough — think about what a buyer might type to find this item.
-        
+
         Return ONLY a JSON object. Use only the categories that are relevant — omit categories that don't apply.
         You may invent category names appropriate to the item type.
-        
+
         Example structure (adapt categories to the item):
         {
           "colors": ["blue", "gold", "ivory"],
-          "materials": ["linen", "cotton", "brass"],
+          "materials": ["linen", "cotton"],
           "patterns": ["floral", "geometric"],
           "style": ["art deco", "Victorian", "farmhouse"],
           "era": ["1920s", "mid-century"],
           "condition": ["excellent", "minor wear"],
-          "use_case": ["dining", "wedding", "decorative", "display"],
-          "item_type": ["tablecloth", "candlestick", "vase"],
+          "use_case": ["dining", "wedding", "decorative"],
+          "item_type": ["tablecloth", "napkin", "runner"],
           "dimensions": ["rectangular", "60x120 inches"],
-          "descriptors": ["ornate", "heavy", "patinated", "hand-embroidered"],
-          "search_keywords": ["vintage brass candlestick", "art deco table decor"]
+          "descriptors": ["ornate", "hand-embroidered", "delicate"],
+          "search_keywords": ["vintage linen tablecloth", "antique embroidered runner"]
         }
-        
+
         The "search_keywords" array should contain 3-8 natural language phrases a buyer might search for.
+
+        If seller preferences are provided, incorporate them into your keyword selection accordingly.
         """;
 
     // ── DB upsert ───────────────────────────────────────────────────────────
@@ -231,7 +244,7 @@ public sealed class GenerateKeywordsHandler
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    // ── Vector refresh (calls the existing AiSearchVectors endpoint) ────────
+    // ── Vector refresh ──────────────────────────────────────────────────────
 
     private async Task<bool> RefreshVectorAsync(int inventoryId, CancellationToken ct)
     {

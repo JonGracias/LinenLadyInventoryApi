@@ -1,4 +1,5 @@
 using LinenLady.Inventory.Functions.Infrastructure.Sql;
+using LinenLady.Inventory.Infrastructure.Sql;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -67,6 +68,22 @@ var host = new HostBuilder()
         services.AddScoped<LinenLady.Inventory.Application.Customers.SquareWebhookHandler>();
         services.AddScoped<LinenLady.Inventory.Application.Customers.ExpireReservationsHandler>();
         services.AddScoped<LinenLady.Inventory.Application.Customers.MessageHandler>();
+
+        // Site Media handlers
+        services.AddSingleton<LinenLady.Inventory.Application.Site.SiteMediaService>();
+        services.AddScoped<ISiteRepository>(_ => new SiteRepository(sqlConnStr));
+        services.AddScoped<LinenLady.Inventory.Application.Site.ListSiteMediaHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.CreateSiteMediaHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.DeleteSiteMediaHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.ListSiteConfigHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.GetSiteConfigHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.SetSiteConfigHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.ListHeroSlidesHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.CreateHeroSlideHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.UpdateHeroSlideHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.DeleteHeroSlideHandler>();
+        services.AddScoped<LinenLady.Inventory.Application.Site.ReorderHeroSlidesHandler>();
+        services.AddScoped<LinenLady.Inventory.Functions.Site.SiteFunctions>();
 
     })
     .Build();
