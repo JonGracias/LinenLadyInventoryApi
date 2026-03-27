@@ -1,4 +1,4 @@
-// GetItemById.cs
+// /Functions/GetItemById.cs
 using System.Net;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
@@ -17,7 +17,7 @@ public sealed class GetItemById
         _logger = loggerFactory.CreateLogger<GetItemById>();
     }
 
-    // ── Shared ordinals — keep aligned with the SELECT list in both queries ──
+    // ── Shared ordinals — keep aligned with the SELECT list ──────────────────
     private const int O_InventoryId    = 0;
     private const int O_PublicId       = 1;
     private const int O_Sku            = 2;
@@ -31,10 +31,11 @@ public sealed class GetItemById
     private const int O_IsFeatured     = 10;
     private const int O_CreatedAt      = 11;
     private const int O_UpdatedAt      = 12;
-    private const int O_ImageId        = 13;
-    private const int O_ImagePath      = 14;
-    private const int O_IsPrimary      = 15;
-    private const int O_SortOrder      = 16;
+    private const int O_KeywordsJson   = 13;  // ← new
+    private const int O_ImageId        = 14;
+    private const int O_ImagePath      = 15;
+    private const int O_IsPrimary      = 16;
+    private const int O_SortOrder      = 17;
 
     private const string SelectColumns = """
         i.InventoryId,
@@ -50,13 +51,20 @@ public sealed class GetItemById
         i.IsFeatured,
         i.CreatedAt,
         i.UpdatedAt,
+        m.KeywordsJson,
         img.ImageId,
         img.ImagePath,
         img.IsPrimary,
         img.SortOrder
         """;
 
-    // ── GET /api/items/sku/{sku} ───────────────────────────────────────────────
+    private const string FromClause = """
+        FROM inv.Inventory i
+        LEFT JOIN inv.InventoryAiMeta m   ON m.InventoryId  = i.InventoryId
+        LEFT JOIN inv.InventoryImage  img ON img.InventoryId = i.InventoryId
+        """;
+
+    // ── GET /api/items/sku/{sku} ──────────────────────────────────────────────
 
     [Function("GetItemBySku")]
     public async Task<HttpResponseData> RunBySku(
@@ -73,8 +81,7 @@ public sealed class GetItemById
 
         var sql = $"""
             SELECT {SelectColumns}
-            FROM inv.Inventory i
-            LEFT JOIN inv.InventoryImage img ON img.InventoryId = i.InventoryId
+            {FromClause}
             WHERE i.Sku = @Sku AND i.IsDeleted = 0
             ORDER BY img.SortOrder;
             """;
@@ -101,8 +108,7 @@ public sealed class GetItemById
 
         var sql = $"""
             SELECT {SelectColumns}
-            FROM inv.Inventory i
-            LEFT JOIN inv.InventoryImage img ON img.InventoryId = i.InventoryId
+            {FromClause}
             WHERE i.InventoryId = @InventoryId AND i.IsDeleted = 0
             ORDER BY img.SortOrder;
             """;
@@ -151,7 +157,7 @@ public sealed class GetItemById
                         PublicId       = reader.GetGuid(O_PublicId),
                         Sku            = reader.GetString(O_Sku),
                         Name           = reader.GetString(O_Name),
-                        Description    = reader.IsDBNull(O_Description) ? null : reader.GetString(O_Description),
+                        Description    = reader.IsDBNull(O_Description)    ? null : reader.GetString(O_Description),
                         QuantityOnHand = reader.GetInt32(O_QuantityOnHand),
                         UnitPriceCents = reader.GetInt32(O_UnitPriceCents),
                         IsActive       = reader.GetBoolean(O_IsActive),
@@ -160,6 +166,7 @@ public sealed class GetItemById
                         IsFeatured     = reader.GetBoolean(O_IsFeatured),
                         CreatedAt      = reader.GetDateTime(O_CreatedAt),
                         UpdatedAt      = reader.GetDateTime(O_UpdatedAt),
+                        KeywordsJson   = reader.IsDBNull(O_KeywordsJson)   ? null : reader.GetString(O_KeywordsJson),
                     };
                 }
 
